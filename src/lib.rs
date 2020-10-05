@@ -8,11 +8,16 @@ use core::ops::{Index, IndexMut};
 use core::ops::{Mul, MulAssign};
 use core::ops::{Sub, SubAssign};
 use core::slice::SliceIndex;
-use serde::{Serialize, Deserialize};
+
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 #[cfg_attr(test, macro_use)]
 extern crate alloc;
-use alloc::vec::{IntoIter, Vec};
+use alloc::{
+    vec,
+    vec::{IntoIter, Vec},
+};
 
 /// A [`Polynomial`] is just a vector of coefficients. Each coefficient corresponds to a power of
 /// `x` in increasing order. For example, the following polynomial is equal to 4x^2 + 3x - 9.
@@ -27,7 +32,8 @@ use alloc::vec::{IntoIter, Vec};
 /// assert_eq!(a[2], 4);
 /// # }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone)]
 pub struct Polynomial<T>(Vec<T>);
 
 impl<T> Polynomial<T> {
@@ -77,14 +83,14 @@ impl<T> Polynomial<T> {
     /// ```
     pub fn degree(&self) -> usize
     where
-        T: Sub<T, Output = T> + Eq + Copy,
+        T: Sub<T, Output = T> + PartialEq + Copy + Default,
     {
         let mut deg = self.0.len();
         for _ in 0..self.0.len() {
             deg -= 1;
 
             // Generic test if non-zero
-            if self[deg] != self[deg] - self[deg] {
+            if self[deg] != T::default() {
                 break;
             }
         }
@@ -99,16 +105,16 @@ impl<T> Polynomial<T> {
     /// # #[macro_use] extern crate polynomials;
     /// # fn main() {
     /// let a = poly![-8, 2, 4];
-    /// assert_eq!(a.eval(3).unwrap(), 34);
+    /// assert_eq!(a.eval(3), 34);
     /// # }
     /// ```
-    pub fn eval<X>(&self, x: X) -> Option<T>
+    pub fn eval<X>(&self, x: X) -> T
     where
-        T: AddAssign + Copy,
+        T: AddAssign + Copy + Default,
         X: MulAssign + Mul<T, Output = T> + Copy,
     {
-        if self.0.len() == 0 {
-            None
+        if self.0.is_empty() {
+            T::default()
         } else {
             let mut p = x; // running power of `x`
             let mut res = self[0];
@@ -116,16 +122,21 @@ impl<T> Polynomial<T> {
                 res += p * self[i];
                 p *= x;
             }
-            Some(res)
+            res
         }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.0.iter()
     }
+}
 
-    pub fn into_iter(self) -> impl IntoIterator<Item = T, IntoIter = IntoIter<T>> {
-        self.0.into_iter()
+impl<T> Default for Polynomial<T>
+where
+    T: Default,
+{
+    fn default() -> Self {
+        poly![T::default()]
     }
 }
 
@@ -138,6 +149,15 @@ impl<T> From<Vec<T>> for Polynomial<T> {
 impl<T> Into<Vec<T>> for Polynomial<T> {
     fn into(self) -> Vec<T> {
         self.0
+    }
+}
+
+impl<T> IntoIterator for Polynomial<T> {
+    type Item = T;
+    type IntoIter = IntoIter<T>;
+
+    fn into_iter(self) -> IntoIter<T> {
+        self.0.into_iter()
     }
 }
 
@@ -221,7 +241,7 @@ where
     type Output = Self;
 
     fn sub(self, other: Self) -> Self::Output {
-        let mut diff = self.clone();
+        let mut diff = self;
         diff -= other;
         diff
     }
@@ -268,7 +288,7 @@ where
     type Output = Self;
 
     fn mul(self, rhs: T) -> Self::Output {
-        let mut prod = self.clone();
+        let mut prod = self;
         prod *= rhs;
         prod
     }
@@ -300,11 +320,12 @@ impl<T> Mul for Polynomial<T>
 where
     T: Mul<Output = T> + AddAssign + Sub<Output = T>,
     T: Copy + Clone,
+    T: Default,
 {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        let mut new = self.clone();
+        let mut new = self;
         new *= rhs;
         new
     }
@@ -314,19 +335,16 @@ impl<T> MulAssign for Polynomial<T>
 where
     T: Mul<Output = T> + AddAssign + Sub<Output = T>,
     T: Copy + Clone,
+    T: Default,
 {
     fn mul_assign(&mut self, rhs: Self) {
         let orig = self.clone();
 
         // One of the vectors must be non-empty
-        if self.0.len() > 0 || rhs.0.len() > 0 {
+        if !self.0.is_empty() || !rhs.0.is_empty() {
             // Since core::num does not provide the `Zero()` trait
             // this hack lets us calculate zero from any generic
-            let zero = if self.0.len() > 0 {
-                self[0] - self[0]
-            } else {
-                rhs[0] - rhs[0]
-            };
+            let zero = T::default();
 
             // Clear `self`
             for i in 0..self.0.len() {
@@ -364,7 +382,7 @@ where
     type Output = Self;
 
     fn div(self, rhs: T) -> Self::Output {
-        let mut prod = self.clone();
+        let mut prod = self;
         prod /= rhs;
         prod
     }
@@ -383,7 +401,7 @@ where
 
 impl<T> PartialEq for Polynomial<T>
 where
-    T: Sub<T, Output = T> + Eq + Copy,
+    T: Sub<T, Output = T> + PartialEq + Copy + Default,
 {
     fn eq(&self, other: &Self) -> bool {
         let degree = self.degree();
@@ -398,7 +416,7 @@ where
         true
     }
 }
-impl<T> Eq for Polynomial<T> where T: Sub<T, Output = T> + Eq + Copy {}
+impl<T> Eq for Polynomial<T> where T: Sub<T, Output = T> + Eq + Copy + Default {}
 
 /// Creates a [`Polynomial`] from a list of coefficients in ascending order.
 ///
@@ -450,12 +468,12 @@ mod tests {
 
     #[test]
     fn eval() {
-        assert_eq!(poly![1, 1, 1, 1].eval(1).unwrap(), 4);
-        assert_eq!(poly![-2, -2, -2, -2].eval(1).unwrap(), -8);
-        assert_eq!(poly![100, 0, 0, 0].eval(9).unwrap(), 100);
-        assert_eq!(poly![0, 1, 0, 0].eval(9).unwrap(), 9);
-        assert_eq!(poly![0, 0, -1, 0].eval(9).unwrap(), -81);
-        assert_eq!(poly![0, -9, 0, 40].eval(2).unwrap(), 302);
+        assert_eq!(poly![1, 1, 1, 1].eval(1), 4);
+        assert_eq!(poly![-2, -2, -2, -2].eval(1), -8);
+        assert_eq!(poly![100, 0, 0, 0].eval(9), 100);
+        assert_eq!(poly![0, 1, 0, 0].eval(9), 9);
+        assert_eq!(poly![0, 0, -1, 0].eval(9), -81);
+        assert_eq!(poly![0, -9, 0, 40].eval(2), 302);
     }
 
     #[test]
